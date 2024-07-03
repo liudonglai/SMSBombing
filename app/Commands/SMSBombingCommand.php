@@ -13,7 +13,9 @@
 namespace App\Commands;
 
 use Exception;
+use Webmozart\Assert\Assert;
 use GuzzleHttp\{Client, Pool};
+use Illuminate\Support\Stringable;
 use GuzzleHttp\Psr7\{Request, Response};
 use LaravelZero\Framework\Commands\Command;
 use Symfony\Component\Console\Helper\ProgressBar;
@@ -38,6 +40,7 @@ class SMSBombingCommand extends Command
         {--t|timeout=30 : 请求超时时间}
         {--length=64 : 报错展示长度}
         {--stdout=false : 是否输出网站描述}
+        {--f|filename= : 存储 api.json 文件路径}
     ';
 
     /**
@@ -49,16 +52,21 @@ class SMSBombingCommand extends Command
 
     /**
      * Execute the console command.
+     *
+     * @return int
      */
     public function handle(): int
     {
-        $phone = str($this->argument('phone') ?? text(
-            self::LABEL,
-            self::LABEL,
-            required: true,
-            validate: fn (string $value): bool|string => preg_match('/^1[3-9]\d{9}$/', $value) ? true : self::LABEL,
-        ))->trim()->toString();
+        $phone = str($this->argument('phone') ?? $this->handleText())
+            ->trim()
+            ->when(true, function (Stringable $str, $value) {
+                if (preg_match('/^1[3-9]\d{9}$/', $str->toString()) != 1) {
+                    return str($this->handleText())->trim();
+                }
 
+                return $str;
+            })
+            ->toString();
 
         $i = 1;
         $status = true;
@@ -67,8 +75,21 @@ class SMSBombingCommand extends Command
         $client = new Client(['verify' => false, 'timeout' => $this->option('timeout')]);
         $apis = collect(
             json_decode(
-                file_get_contents('https://mirror.ghproxy.com/https://raw.githubusercontent.com/xiaoxuan6/SMSBombing/v2/api.json'),
-            true
+                file_get_contents(
+                    value(function () {
+                        if ($filename = $this->option('filename')) {
+                            str($filename)->startsWith('.') and $filename = getcwd() . str_replace('./', '/', $filename);
+
+                            Assert::fileExists($filename, '文件 [%s] 不存在');
+
+                            return $filename;
+                        }
+
+                        return 'https://mirror.ghproxy.com/https://raw.githubusercontent.com/xiaoxuan6/SMSBombing/v2/api.json';
+
+                    })
+                ),
+                true
             )
         );
 
@@ -94,7 +115,7 @@ class SMSBombingCommand extends Command
             $outFn = function ($response, $index) use ($apis): void {
                 $desc = $apis->get($index)['desc'];
 
-                $message = $this->option('stdout') ?
+                $message = $this->option('stdout') != 'false' ?
                     PHP_EOL . "请求网站：<comment>{$desc}</comment> " .
                     PHP_EOL . "请求结果：<comment>{$response}</comment>" :
                     " 请求结果：<comment>{$response}</comment>";
@@ -161,5 +182,15 @@ class SMSBombingCommand extends Command
         } while ($status);
 
         return self::SUCCESS;
+    }
+
+    private function handleText(): string
+    {
+        return text(
+            self::LABEL,
+            self::LABEL,
+            required: true,
+            validate: fn (string $value): bool|string => preg_match('/^1[3-9]\d{9}$/', $value) ? true : self::LABEL,
+        );
     }
 }
